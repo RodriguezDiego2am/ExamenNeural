@@ -33,7 +33,9 @@ jobs:
           node-version: "22"
       - name: Generar vectores de significado (solo si cambiaron los PDFs)
         run: |
-          if ! git diff --quiet -- data/index.json || [ ! -f data/embeddings.bin ]; then
+          SIG=$(python -c "import json;print('|'.join(d['name']+':'+str(len(d['pages'])) for d in json.load(open('data/index.json'))['docs']))")
+          OLD=$(python -c "import json;print(json.load(open('data/chunks.json'))['sig'])" 2>/dev/null || true)
+          if [ "$SIG" != "$OLD" ] || [ ! -f data/embeddings.bin ]; then
             npm install --no-save @huggingface/transformers@3.8.1 --onnxruntime-node-install-cuda=skip
             node tools/build_embeddings.mjs
           fi
