@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Buscador de Manuales</title>
+  <meta name="theme-color" content="#0f172a">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="searchbar">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Buscar en todos los manuales…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" autofocus>
+      <button id="clear" class="ghost" title="Borrar (Esc)" hidden>✕</button>
+    </div>
+    <div class="toolbar">
+      <select id="docFilter" title="Filtrar por documento"><option value="">Todos los documentos</option></select>
+      <label class="toggle" title="Tolerar errores de tipeo"><input type="checkbox" id="fuzzy" checked> Tolerar errores</label>
+      <button id="manageBtn" class="ghost">📁 PDFs</button>
+    </div>
+    <div id="status" class="status">Cargando…</div>
+  </header>
+
+  <main>
+    <ol id="results" class="results"></ol>
+    <section id="empty" class="emptystate" hidden>
+      <h2>No hay PDFs cargados todavía</h2>
+      <p>Toca <b>📁 PDFs</b> para elegir los manuales desde tu celular o computadora. Se procesan una sola vez y quedan guardados en este navegador.</p>
+    </section>
+    <section id="help" class="help" hidden>
+      <p><b>Consejos:</b></p>
+      <ul>
+        <li>No importan las tildes ni las mayúsculas: <code>configuracion</code> encuentra «Configuración».</li>
+        <li>Basta con el comienzo de la palabra: <code>neur</code> encuentra «neuronal».</li>
+        <li>Frase exacta entre comillas: <code>"red neuronal"</code>.</li>
+        <li>Excluir una palabra con guion: <code>red -social</code>.</li>
+        <li>Atajos: <kbd>/</kbd> para buscar, <kbd>↑</kbd><kbd>↓</kbd> para moverte, <kbd>Enter</kbd> para abrir, <kbd>Esc</kbd> para cerrar o borrar.</li>
+      </ul>
+    </section>
+  </main>
+
+  <!-- Visor de página -->
+  <dialog id="viewer">
+    <div class="vhead">
+      <div class="vtitle"><b id="vDoc"></b> <span id="vPage"></span></div>
+      <div class="vnav">
+        <button id="vPrev" class="ghost" title="Página anterior (←)">‹</button>
+        <button id="vNext" class="ghost" title="Página siguiente (→)">›</button>
+        <button id="vMarkNext" class="ghost" title="Siguiente coincidencia (n)">⤓</button>
+        <a id="vOpen" class="btn" target="_blank" rel="noopener">Abrir PDF</a>
+        <button id="vClose" class="ghost" title="Cerrar (Esc)">✕</button>
+      </div>
+    </div>
+    <div id="vText" class="vtext"></div>
+  </dialog>
+
+  <!-- Gestión de PDFs -->
+  <dialog id="manage">
+    <div class="vhead">
+      <div class="vtitle"><b>Documentos</b></div>
+      <button id="mClose" class="ghost">✕</button>
+    </div>
+    <div class="mbody">
+      <label class="dropzone" id="drop">
+        <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+        <span>➕ <b>Agregar PDFs</b><br><small>Elegí varios a la vez. Se procesan en este dispositivo y quedan guardados aquí.</small></span>
+      </label>
+      <div id="progress" class="progress" hidden><div id="progressBar"></div><span id="progressText"></span></div>
+      <ul id="docList" class="doclist"></ul>
+      <button id="clearLocal" class="danger" hidden>Borrar los PDFs cargados en este dispositivo</button>
+    </div>
+  </dialog>
+
+  <script src="vendor/minisearch.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
