@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const els = {
   q: $('q'), clear: $('clear'), status: $('status'), results: $('results'), empty: $('empty'), help: $('help'),
-  docFilter: $('docFilter'), fuzzy: $('fuzzy'), manageBtn: $('manageBtn'),
+  docFilter: $('docFilter'), fuzzy: $('fuzzy'), manageBtn: $('manageBtn'), modeKw: $('modeKw'), modeSem: $('modeSem'),
   viewer: $('viewer'), vDoc: $('vDoc'), vPage: $('vPage'), vText: $('vText'), vPrev: $('vPrev'), vNext: $('vNext'),
   vMarkNext: $('vMarkNext'), vOpen: $('vOpen'), vClose: $('vClose'),
   manage: $('manage'), mClose: $('mClose'), drop: $('drop'), fileInput: $('fileInput'), progress: $('progress'),
@@ -48,6 +48,10 @@ let pageRefs = [];    // id -> {d, p}
 let mini = null;
 let current = { hits: [], shown: 0, regexes: [] };
 let sel = -1;
+let searchSeq = 0;
+let mode = (() => { try { return localStorage.getItem('modo') === 'sem' ? 'sem' : 'kw'; } catch { return 'kw'; } })();
+const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
+const sem = { ok: false, loading: null, chunks: null, E: null, dim: 384, model: null };
 const foldedCache = new Map();
 const foldedPage = (d, p) => {
   const k = d + ':' + p;
@@ -159,6 +163,7 @@ function runSearch() {
   els.empty.hidden = hasDocs;
   els.help.hidden = !hasDocs || !!raw;
   if (!raw || !mini) {
+    searchSeq++;
     current = { hits: [], shown: 0, regexes: [] };
     els.results.innerHTML = '';
     updateFilterCounts(null);
@@ -180,26 +185,23 @@ function runSearch() {
 
   const phraseRes = phrases.map((ws) => new RegExp(B + ws.map(escRe).join('[\\s\\p{P}]+'), 'u'));
   const exclRes = excludes.filter(Boolean).map((w) => new RegExp(B + escRe(w), 'u'));
-  if (phraseRes.length || exclRes.length) {
-    hits = hits.filter((h) => {
-      const f = foldedPage(h.d, h.p);
-      return phraseRes.every((re) => re.test(f)) && !exclRes.some((re) => re.test(f));
-    });
+  const accept = (h) => {
+    if (!phraseRes.length && !exclRes.length) return true;
+    const f = foldedPage(h.d, h.p);
+    return phraseRes.every((re) => re.test(f)) && !exclRes.some((re) => re.test(f));
+  };
+  hits = hits.filter(accept);
+  if (mode === 'sem') {
+    // Las palabras pesan fuerte solo si la página las tiene todas; si no, coincidencias parciales con menos peso
+    runSemantic(raw, { kwHits: hits, kwWeight: partial ? 0.25 : 1, accept, regexes: buildRegexes(hits, phrases) });
+    return;
   }
+  searchSeq++; // invalida una búsqueda semántica en curso
 
   updateFilterCounts(hits);
   const dsel = els.docFilter.value;
   const shownHits = dsel === '' ? hits : hits.filter((h) => String(h.d) === dsel);
-
-  // Regex de resaltado: palabras realmente encontradas + frases
-  const matched = new Set();
-  for (const h of shownHits.slice(0, 300)) for (const t of h.terms) matched.add(t);
-  const regexes = [];
-  if (matched.size) {
-    const alt = [...matched].sort((a, b) => b.length - a.length).map(escRe).join('|');
-    regexes.push(new RegExp(B + '(?:' + alt + ')(?![\\p{L}\\p{N}])', 'gu'));
-  }
-  for (const ws of phrases) regexes.push(new RegExp(B + ws.map(escRe).join('[\\s\\p{P}]+'), 'gu'));
+  const regexes = buildRegexes(shownHits, phrases);
 
   current = { hits: shownHits, shown: 0, regexes };
   els.results.innerHTML = '';
@@ -213,7 +215,115 @@ function runSearch() {
     : 'Sin resultados' + (els.fuzzy.checked ? '' : ' (probá activar «Tolerar errores»)');
 }
 
+/* ---------- Búsqueda por significado (embeddings, 100% en el navegador) ---------- */
+function ensureSem() {
+  if (sem.ok) return Promise.resolve();
+  if (sem.loading) return sem.loading;
+  sem.loading = (async () => {
+    const [cr, er] = await Promise.all([fetch('data/chunks.json', { cache: 'no-cache' }), fetch('data/embeddings.bin', { cache: 'no-cache' })]);
+    if (!cr.ok || !er.ok) throw new Error('faltan los datos semánticos en el sitio');
+    const meta = await cr.json();
+    const repoSig = docs.filter((d) => d.source === 'repo').map((d) => d.name + ':' + d.pages.length).join('|');
+    if (meta.sig !== repoSig) throw new Error('el índice semántico está desactualizado (se regenera solo al publicar)');
+    sem.chunks = meta.chunks; sem.dim = meta.dim;
+    sem.E = new Int8Array(await er.arrayBuffer());
+    const T = await import(TRANSFORMERS_URL);
+    T.env.allowLocalModels = false;
+    sem.model = await T.pipeline('feature-extraction', meta.model, {
+      dtype: 'q8',
+      progress_callback: (p) => {
+        if (p.status === 'progress' && /\.onnx$/.test(p.file || '') && mode === 'sem')
+          els.status.textContent = `Descargando el modelo de significado (solo la primera vez): ${Math.round(p.progress)}% de ${Math.round(p.total / 1e6)} MB`;
+      },
+    });
+    sem.ok = true;
+  })().catch((e) => { sem.loading = null; throw e; });
+  return sem.loading;
+}
+
+async function runSemantic(raw, ctx) {
+  const seq = ++searchSeq;
+  els.status.textContent = sem.ok ? '🔎 Buscando por significado…' : 'Cargando la búsqueda por significado…';
+  try { await ensureSem(); } catch (e) {
+    console.error(e);
+    if (seq === searchSeq) {
+      showHits(ctx.kwHits, ctx.regexes);
+      els.status.textContent = '⚠️ No se pudo usar la búsqueda por significado (' + (e.message || e) + '). Mostrando búsqueda por palabras.';
+    }
+    return;
+  }
+  if (seq !== searchSeq) return;
+  const t0 = performance.now();
+  const q = raw.replace(/["]/g, ' ').replace(/(^|\s)-\S+/g, ' ').trim() || raw;
+  const v = (await sem.model('query: ' + q, { pooling: 'mean', normalize: true })).data;
+  if (seq !== searchSeq) return;
+
+  const { chunks, E, dim } = sem;
+  const best = new Map(); // página -> {score, chunk}
+  for (let i = 0; i < chunks.length; i++) {
+    let s = 0;
+    const o = i * dim;
+    for (let j = 0; j < dim; j++) s += v[j] * E[o + j];
+    const [d, p, a, b] = chunks[i];
+    const k = d + ':' + p;
+    const cur = best.get(k);
+    if (!cur || s > cur.score) best.set(k, { d, p, score: s, chunk: [a, b] });
+  }
+  let semHits = [...best.values()].filter(ctx.accept).sort((x, y) => y.score - x.score).slice(0, 150);
+
+  // Fusión por ranking recíproco: significado + palabras
+  const K = 10, fused = new Map();
+  semHits.forEach((h, r) => fused.set(h.d + ':' + h.p, { d: h.d, p: h.p, chunk: h.chunk, terms: [], f: 1 / (K + r) }));
+  ctx.kwHits.slice(0, 150).forEach((h, r) => {
+    const k = h.d + ':' + h.p;
+    const x = fused.get(k) || { d: h.d, p: h.p, terms: [], f: 0 };
+    x.terms = h.terms; x.f += ctx.kwWeight / (K + r);
+    fused.set(k, x);
+  });
+  const all = [...fused.values()].sort((a, b) => b.f - a.f).slice(0, 120);
+  showHits(all, ctx.regexes);
+  els.results.dataset.q = raw;
+  const ms = Math.round(performance.now() - t0);
+  els.status.textContent = `🧠 ${current.hits.length} resultados ordenados por significado · ${ms} ms`;
+}
+
+function showHits(all, regexes) {
+  updateFilterCounts(all);
+  const dsel = els.docFilter.value;
+  const hits = dsel === '' ? all : all.filter((h) => String(h.d) === dsel);
+  current = { hits, shown: 0, regexes };
+  sel = -1;
+  els.results.innerHTML = '';
+  renderMore();
+}
+
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem('modo', m); } catch {}
+  els.modeKw.classList.toggle('on', m === 'kw');
+  els.modeSem.classList.toggle('on', m === 'sem');
+  if (m === 'sem' && docs.length) ensureSem().catch(() => {});
+  runSearch();
+}
+
+// Regex de resaltado: palabras realmente encontradas + frases
+function buildRegexes(hits, phrases) {
+  const matched = new Set();
+  for (const h of hits.slice(0, 300)) for (const t of h.terms) matched.add(t);
+  const regexes = [];
+  if (matched.size) {
+    const alt = [...matched].sort((a, b) => b.length - a.length).map(escRe).join('|');
+    regexes.push(new RegExp(B + '(?:' + alt + ')(?![\\p{L}\\p{N}])', 'gu'));
+  }
+  for (const ws of phrases) regexes.push(new RegExp(B + ws.map(escRe).join('[\\s\\p{P}]+'), 'gu'));
+  return regexes;
+}
+
 function statusIdle() {
+  if (mode === 'sem' && !sem.ok) return sem.loading ? 'Cargando la búsqueda por significado…' : statusBase();
+  return statusBase();
+}
+function statusBase() {
   if (!docs.length) return 'Sin documentos cargados';
   const pages = docs.reduce((a, d) => a + d.pages.length, 0);
   return `${docs.length} documentos · ${pages} páginas indexadas`;
@@ -250,9 +360,19 @@ function highlight(text, ranges, start, end, collapse) {
   return html + norm(text.slice(pos, end));
 }
 
-function snippets(d, p) {
+function snippets(h) {
+  const { d, p } = h;
   const text = docs[d].pages[p - 1];
   const ranges = findRanges(foldedPage(d, p), current.regexes);
+  if (h.chunk) {
+    const [cs, ce] = h.chunk;
+    const first = ranges.find(([a]) => a >= cs && a < ce);
+    let s = first && first[0] > cs + 250 ? first[0] - 100 : cs;
+    if (s > cs) { const sp = text.indexOf(' ', s); if (sp > 0 && sp < s + 20) s = sp + 1; }
+    let e = Math.min(ce, s + 380);
+    if (e < ce) { const sp = text.lastIndexOf(' ', e); if (sp > s + 300) e = sp; }
+    return [(s > 0 ? '…' : '') + highlight(text, ranges, s, e, true) + (e < text.length ? '…' : '')];
+  }
   if (!ranges.length) return [escHtml(text.slice(0, 200).replace(/\s+/g, ' ')) + '…'];
   // Elegir la ventana con más palabras distintas resaltadas
   const W = 220;
@@ -287,7 +407,7 @@ function renderMore() {
     const li = document.createElement('li');
     li.dataset.i = i;
     li.innerHTML = `<div class="rhead"><span class="rdoc">${escHtml(docs[h.d].name)}</span><span class="rpage">pág. ${h.p}</span></div>` +
-      snippets(h.d, h.p).map((s) => `<div class="snip">${s}</div>`).join('');
+      snippets(h).map((s) => `<div class="snip">${s}</div>`).join('');
     frag.appendChild(li);
   }
   current.shown = end;
@@ -324,11 +444,12 @@ function refreshDocUI() {
 
 /* ---------- Visor ---------- */
 let view = null; // {d, p, markIdx}
-function openViewer(d, p) {
-  view = { d, p, markIdx: -1 };
+function openViewer(h) {
+  view = { d: h.d, p: h.p, chunk: h.chunk || null, markIdx: -1 };
   renderViewer();
   if (!els.viewer.open) els.viewer.showModal();
-  nextMark();
+  const s = els.vText.querySelector('.semhl');
+  if (s) s.scrollIntoView({ block: 'center' }); else nextMark();
 }
 function renderViewer() {
   const { d, p } = view;
@@ -337,7 +458,10 @@ function renderViewer() {
   els.vPage.textContent = `· pág. ${p} de ${doc.pages.length}`;
   const text = doc.pages[p - 1] || '';
   const ranges = findRanges(foldedPage(d, p), current.regexes);
-  els.vText.innerHTML = text ? highlight(text, ranges, 0, text.length, false) : '<i>(Página sin texto: puede ser una imagen escaneada)</i>';
+  const c = view.chunk;
+  els.vText.innerHTML = !text ? '<i>(Página sin texto: puede ser una imagen escaneada)</i>'
+    : c ? highlight(text, ranges, 0, c[0], false) + '<span class="semhl">' + highlight(text, ranges, c[0], c[1], false) + '</span>' + highlight(text, ranges, c[1], text.length, false)
+    : highlight(text, ranges, 0, text.length, false);
   els.vText.scrollTop = 0;
   els.vPrev.disabled = p <= 1;
   els.vNext.disabled = p >= doc.pages.length;
@@ -360,6 +484,7 @@ function turnPage(delta) {
   const np = view.p + delta;
   if (np < 1 || np > docs[view.d].pages.length) return;
   view.p = np;
+  view.chunk = null;
   renderViewer();
 }
 
@@ -418,7 +543,9 @@ async function ingest(files) {
 
 /* ---------- Eventos ---------- */
 let timer;
-els.q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, 90); });
+els.q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(runSearch, mode === 'sem' ? 300 : 90); });
+els.modeKw.addEventListener('click', () => setMode('kw'));
+els.modeSem.addEventListener('click', () => setMode('sem'));
 els.docFilter.addEventListener('change', runSearch);
 els.fuzzy.addEventListener('change', runSearch);
 els.clear.addEventListener('click', () => { els.q.value = ''; runSearch(); els.q.focus(); });
@@ -427,8 +554,7 @@ els.results.addEventListener('click', (e) => {
   if (e.target.closest('.more')) { renderMore(); return; }
   const li = e.target.closest('li[data-i]');
   if (!li) return;
-  const h = current.hits[+li.dataset.i];
-  openViewer(h.d, h.p);
+  openViewer(current.hits[+li.dataset.i]);
 });
 
 function setSel(i) {
@@ -454,8 +580,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowUp') { e.preventDefault(); setSel(sel - 1); }
   else if (e.key === 'Enter' && current.hits.length) {
     e.preventDefault();
-    const h = current.hits[sel >= 0 ? sel : 0];
-    openViewer(h.d, h.p);
+    openViewer(current.hits[sel >= 0 ? sel : 0]);
     els.q.blur();
   } else if (e.key === 'Escape' && inInput && els.q.value) { e.preventDefault(); els.q.value = ''; runSearch(); }
 });
@@ -488,4 +613,4 @@ els.clearLocal.addEventListener('click', async () => {
   await rebuildIndex();
 });
 
-init().catch((e) => { console.error(e); els.status.textContent = 'Error al cargar: ' + e.message; });
+init().then(() => { if (mode === 'sem') setMode('sem'); }).catch((e) => { console.error(e); els.status.textContent = 'Error al cargar: ' + e.message; });

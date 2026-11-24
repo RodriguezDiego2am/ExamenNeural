@@ -117,3 +117,10 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .doclist button { padding: 2px 8px; }
 
 button:disabled { opacity: .35; cursor: default; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+.seg button { border: 0; background: transparent; padding: 6px 10px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.seg button.on { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .seg button.on { color: #0b1120; } }
+.semhl { background: var(--accent-soft); border-radius: 4px; box-shadow: 0 0 0 4px var(--accent-soft); }
+.rbadge { font-size: 12px; color: var(--muted); margin-left: 6px; font-weight: 400; }

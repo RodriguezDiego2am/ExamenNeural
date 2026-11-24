@@ -15,6 +15,10 @@
       <button id="clear" class="ghost" title="Borrar (Esc)" hidden>✕</button>
     </div>
     <div class="toolbar">
+      <div class="seg" role="tablist" title="Modo de búsqueda">
+        <button id="modeKw" class="on" role="tab">🔤 Palabras</button>
+        <button id="modeSem" role="tab">🧠 Significado</button>
+      </div>
       <select id="docFilter" title="Filtrar por documento"><option value="">Todos los documentos</option></select>
       <label class="toggle" title="Tolerar errores de tipeo"><input type="checkbox" id="fuzzy" checked> Tolerar errores</label>
       <button id="manageBtn" class="ghost">📁 PDFs</button>
@@ -33,6 +37,7 @@
       <ul>
         <li>No importan las tildes ni las mayúsculas: <code>configuracion</code> encuentra «Configuración».</li>
         <li>Basta con el comienzo de la palabra: <code>neur</code> encuentra «neuronal».</li>
+        <li><b>🧠 Significado</b>: escribí la pregunta con tus palabras (<code>cómo devuelvo mercadería que llegó mal</code>) y encuentra los fragmentos que hablan de eso aunque usen otras palabras. Combina significado y palabras exactas.</li>
         <li>Frase exacta entre comillas: <code>"red neuronal"</code>.</li>
         <li>Excluir una palabra con guion: <code>red -social</code>.</li>
         <li>Atajos: <kbd>/</kbd> para buscar, <kbd>↑</kbd><kbd>↓</kbd> para moverte, <kbd>Enter</kbd> para abrir, <kbd>Esc</kbd> para cerrar o borrar.</li>
